@@ -1,4 +1,5 @@
-name: Build Android APK
+          # 1. Locate the exact Android root directory containing settings.gradle
+         name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -19,10 +20,15 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Extract Project ZIP
+      - name: Extract All ZIP Files
         run: |
           python3 -c "
           import zipfile, glob, os
@@ -32,37 +38,57 @@ jobs:
                   zip_ref.extractall('.')
           "
 
-      - name: Build Android Debug APK
+      - name: Build Android APK
         run: |
-          # 1. Locate the exact Android root directory containing settings.gradle
-          SETTINGS_FILE=$(find . -name "settings.gradle*" | head -n 1)
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "Error: settings.gradle not found!"
-            exit 1
-          fi
+          # 1. Look for any build.gradle or app directory
+          GRADLE_FILE=$(find . -name "build.gradle*" | head -n 1)
 
-          ROOT_DIR=$(dirname "$SETTINGS_FILE")
-          echo "Android Project Root: $ROOT_DIR"
-          cd "$ROOT_DIR"
+          if [ -n "$GRADLE_FILE" ]; then
+            echo "Found Android Project build file at: $GRADLE_FILE"
+            PROJECT_ROOT=$(dirname "$GRADLE_FILE")
+            if [ "$(basename "$PROJECT_ROOT")" = "app" ]; then
+              PROJECT_ROOT=$(dirname "$PROJECT_ROOT")
+            fi
+            cd "$PROJECT_ROOT"
 
-          # 2. Create required .env file for AI Studio
-          echo "GEMINI_API_KEY=dummy_key_12345" > .env
+            # Auto-generate settings.gradle.kts if missing
+            if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+              echo 'rootProject.name = "SyncStream"' > settings.gradle.kts
+              echo 'include(":app")' >> settings.gradle.kts
+            fi
 
-          # 3. Remove the debugConfig signing line required by AI Studio
-          find . -name "build.gradle.kts" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
-          find . -name "build.gradle" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
+            # Setup environment variables
+            echo "GEMINI_API_KEY=dummy_key_12345" > .env
 
-          # 4. Make gradlew executable or create wrapper
-          if [ -f "gradlew" ]; then
-            chmod +x ./gradlew
+            # Clean debugConfig signing issues
+            find . -name "build.gradle.kts" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
+            find . -name "build.gradle" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
+
+            # Generate wrapper if missing
+            if [ ! -f "gradlew" ]; then
+              echo "Generating Gradle wrapper..."
+              gradle wrapper --gradle-version 8.7
+            fi
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+
           else
-            echo "Generating Gradle wrapper..."
-            gradle wrapper --gradle-version 8.7
-            chmod +x ./gradlew
-          fi
+            echo "Wrapping Web files into Native APK..."
+            mkdir -p web_wrapper/www
+            find . -maxdepth 3 -name "*.html" -exec cp {} web_wrapper/www/ \;
+            find . -maxdepth 3 -name "*.js" -exec cp {} web_wrapper/www/ \; || true
+            find . -maxdepth 3 -name "*.css" -exec cp {} web_wrapper/www/ \; || true
 
-          # 5. Build the Debug APK
-          ./gradlew assembleDebug --no-daemon --stacktrace
+            cd web_wrapper
+            npm init -y
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+            npx cap init "SyncStream" "com.soundsync.app" --web-dir "www"
+            npx cap add android
+            npx cap copy
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
