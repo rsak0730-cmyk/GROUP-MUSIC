@@ -27,67 +27,65 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Extract All ZIP Files
+      - name: Extract ZIP Files If Present
         run: |
           python3 -c "
-          import zipfile, glob, os
-          for z in glob.glob('**/*.zip', recursive=True):
-              print('Extracting:', z)
-              with zipfile.ZipFile(z, 'r') as zip_ref:
-                  zip_ref.extractall('.')
-          "
+          import zipfile, os
+          for root, dirs, files in os.walk('.'):
+              for f in files:
+                  if f.lower().endswith('.zip'):
+                      p = os.path.join(root, f)
+                      print('Extracting:', p)
+                      with zipfile.ZipFile(p, 'r') as z:
+                          z.extractall('.')
+          " || true
 
-      - name: Build Android APK
+      - name: Build Android App via Capacitor
         run: |
-          # 1. Look for any build.gradle or app directory
-          GRADLE_FILE=$(find . -name "build.gradle*" | head -n 1)
+          # 1. Setup workspace and www directory
+          mkdir -p app_builder/www
+          cd app_builder
 
-          if [ -n "$GRADLE_FILE" ]; then
-            echo "Found Android Project build file at: $GRADLE_FILE"
-            PROJECT_ROOT=$(dirname "$GRADLE_FILE")
-            if [ "$(basename "$PROJECT_ROOT")" = "app" ]; then
-              PROJECT_ROOT=$(dirname "$PROJECT_ROOT")
-            fi
-            cd "$PROJECT_ROOT"
-
-            # Auto-generate settings.gradle.kts if missing
-            if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-              echo 'rootProject.name = "SyncStream"' > settings.gradle.kts
-              echo 'include(":app")' >> settings.gradle.kts
-            fi
-
-            # Setup environment variables
-            echo "GEMINI_API_KEY=dummy_key_12345" > .env
-
-            # Clean debugConfig signing issues
-            find . -name "build.gradle.kts" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
-            find . -name "build.gradle" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
-
-            # Generate wrapper if missing
-            if [ ! -f "gradlew" ]; then
-              echo "Generating Gradle wrapper..."
-              gradle wrapper --gradle-version 8.7
-            fi
-            chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace
-
+          # 2. Locate index.html or create it from repo
+          HTML_SRC=$(find .. -name "index.html" | head -n 1)
+          if [ -n "$HTML_SRC" ]; then
+            echo "Using found index.html from $HTML_SRC"
+            cp "$HTML_SRC" www/index.html
           else
-            echo "Wrapping Web files into Native APK..."
-            mkdir -p web_wrapper/www
-            find . -maxdepth 3 -name "*.html" -exec cp {} web_wrapper/www/ \;
-            find . -maxdepth 3 -name "*.js" -exec cp {} web_wrapper/www/ \; || true
-            find . -maxdepth 3 -name "*.css" -exec cp {} web_wrapper/www/ \; || true
-
-            cd web_wrapper
-            npm init -y
-            npm install @capacitor/core @capacitor/cli @capacitor/android
-            npx cap init "SyncStream" "com.soundsync.app" --web-dir "www"
-            npx cap add android
-            npx cap copy
-            cd android
-            chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon
+            echo "Copying all web assets..."
+            find .. -maxdepth 3 -name "*.html" -exec cp {} www/ \; || true
+            find .. -maxdepth 3 -name "*.js" -exec cp {} www/ \; || true
+            find .. -maxdepth 3 -name "*.css" -exec cp {} www/ \; || true
           fi
+
+          # If www/index.html is still missing, pull latest entry file
+          if [ ! -f "www/index.html" ]; then
+            curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/index.html" -o www/index.html || true
+          fi
+
+          # 3. Initialize Capacitor Native Project
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "SoundSync" "com.soundsync.app" --web-dir "www"
+          npx cap add android
+
+          # 4. Add Android Permissions into AndroidManifest.xml
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          PERMS='
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+          '
+          sed -i "/<manifest/a $PERMS" "$MANIFEST" || true
+
+          # 5. Sync and Compile APK
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
