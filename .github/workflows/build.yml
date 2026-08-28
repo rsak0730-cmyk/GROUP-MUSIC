@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -19,17 +19,27 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Find and Grant Permission for Gradlew
+      - name: Extract Project ZIP
         run: |
-          find . -name "gradlew" -exec chmod +x {} +
+          find . -name "*.zip" -exec unzip -o {} \;
+
+      - name: Setup Environment & Fix Build Config
+        run: |
+          GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
+          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
+          cd "$PROJECT_DIR"
+          chmod +x gradlew
+          echo "GEMINI_API_KEY=dummy_key" > .env
+          find . -name "build.gradle.kts" -exec sed -i '/signingConfig = signingConfigs.getByName("debugConfig")/d' {} + || true
 
       - name: Build Debug APK
         run: |
-          GRADLEW_DIR=$(dirname $(find . -name "gradlew" | head -n 1))
-          cd "$GRADLEW_DIR"
+          GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
+          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
+          cd "$PROJECT_DIR"
           ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
