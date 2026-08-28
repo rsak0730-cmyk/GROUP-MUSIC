@@ -13,24 +13,55 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Set up Node.js
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
 
       - name: Build Android APK
         run: |
-          # 1. Accept SDK licenses & install build tools
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          mkdir -p app_build/www
+          
+          # Extract zip if present
+          unzip -q -o "*.zip" -d app_build/www/ 2>/dev/null || true
+          
+          # Find index.html
+          HTML_FILE=$(find . -maxdepth 2 -name "index.html" | head -n 1)
+          if [ -n "$HTML_FILE" ]; then
+            cp "$HTML_FILE" app_build/www/index.html
+          else
+            echo "<!DOCTYPE html><html><body><h1>SoundSync App</h1></body></html>" > app_build/www/index.html
+          fi
 
-          # 2. Reset workspace directory
+          # Create Capacitor App
+          cd app_build
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "SoundSync" "com.soundsync.app" --web-dir "www"
+          npx cap add android
+
+          # Inject Permissions
+          python3 -c "
+          p = 'android/app/src/main/AndroidManifest.xml'
+          with open(p, 'r') as f: c = f.read()
+          c = c.replace('<application', '<uses-permission android:name=\"android.permission.CAMERA\"/><uses-permission android:name=\"android.permission.RECORD_AUDIO\"/><uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\"/><application')
+          with open(p, 'w') as f: f.write(c)
+          "
+
+          # Compile APK
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: '**/*.apk'
