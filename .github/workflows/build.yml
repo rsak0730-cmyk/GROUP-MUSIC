@@ -19,21 +19,47 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Extract Project ZIP
+      - name: Extract Project ZIP Safely
         run: |
-          find . -name "*.zip" -exec unzip -o {} \;
+          python3 -c "
+          import zipfile, glob, os
+          for z in glob.glob('**/*.zip', recursive=True):
+              print(f'Extracting: {z}')
+              with zipfile.ZipFile(z, 'r') as zip_ref:
+                  zip_ref.extractall('.')
+          "
 
       - name: Setup Environment & Fix Build Config
         run: |
-          GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
-          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
+          GRADLEW_FILE=$(find . -type f -name "gradlew" | head -n 1)
+          
+          if [ -z "$GRADLEW_FILE" ]; then
+            echo "Installing Gradle wrapper..."
+            sudo apt-get update && sudo apt-get install -y gradle
+            gradle wrapper
+            GRADLEW_FILE="./gradlew"
+          fi
+          
+          chmod +x "$GRADLEW_FILE"
+          PROJECT_DIR=$(dirname "$GRADLEW_FILE")
           cd "$PROJECT_DIR"
-          chmod +x gradlew
+          
           echo "GEMINI_API_KEY=dummy_key" > .env
           find . -name "build.gradle.kts" -exec sed -i '/signingConfig = signingConfigs.getByName("debugConfig")/d' {} + || true
 
       - name: Build Debug APK
         run: |
+          GRADLEW_FILE=$(find . -type f -name "gradlew" | head -n 1)
+          PROJECT_DIR=$(dirname "$GRADLEW_FILE")
+          cd "$PROJECT_DIR"
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: '**/build/outputs/apk/debug/*.apk'
           GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
           PROJECT_DIR=$(dirname "$GRADLEW_PATH")
           cd "$PROJECT_DIR"
