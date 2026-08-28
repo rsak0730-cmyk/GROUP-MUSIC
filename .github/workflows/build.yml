@@ -19,14 +19,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
+      - name: Find and Grant Permission for Gradlew
+        run: |
+          find . -name "gradlew" -exec chmod +x {} +
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          GRADLEW_DIR=$(dirname $(find . -name "gradlew" | head -n 1))
+          cd "$GRADLEW_DIR"
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: '**/build/outputs/apk/debug/*.apk'
