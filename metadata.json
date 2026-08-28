@@ -1,0 +1,7 @@
+{
+  "name": "SyncStream",
+  "description": "Sync music and media across multiple devices via QR codes. Host sessions to play audio from any app on all phones.",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
