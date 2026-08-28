@@ -19,45 +19,49 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Extract Project ZIP
         run: |
           python3 -c "
-          import zipfile, os
-          for root, dirs, files in os.walk('.'):
-              for f in files:
-                  if f.lower().endswith('.zip'):
-                      p = os.path.join(root, f)
-                      print('Extracting:', p)
-                      with zipfile.ZipFile(p, 'r') as z:
-                          z.extractall('.')
+          import zipfile, glob, os
+          for z in glob.glob('**/*.zip', recursive=True):
+              print('Extracting:', z)
+              with zipfile.ZipFile(z, 'r') as zip_ref:
+                  zip_ref.extractall('.')
           "
 
-      - name: Prepare Android Project
+      - name: Build Android Debug APK
         run: |
-          BUILD_FILE=$(find . -name "settings.gradle*" -o -name "build.gradle*" | head -n 1)
-          if [ -n "$BUILD_FILE" ]; then
-            PROJECT_DIR=$(dirname "$BUILD_FILE")
-          else
-            PROJECT_DIR="."
+          # 1. Locate the exact Android root directory containing settings.gradle
+          SETTINGS_FILE=$(find . -name "settings.gradle*" | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "Error: settings.gradle not found!"
+            exit 1
           fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          
-          cd "$PROJECT_DIR"
-          echo "GEMINI_API_KEY=dummy_key" > .env
-          find . -name "build.gradle.kts" -exec sed -i '/debugConfig/d' {} + || true
-          
-          if [ ! -f "gradlew" ]; then
-            echo "Generating missing Gradle wrapper..."
-            gradle wrapper
-          fi
-          chmod +x gradlew
 
-      - name: Build Debug APK
-        run: |
-          cd "$PROJECT_DIR"
+          ROOT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "Android Project Root: $ROOT_DIR"
+          cd "$ROOT_DIR"
+
+          # 2. Create required .env file for AI Studio
+          echo "GEMINI_API_KEY=dummy_key_12345" > .env
+
+          # 3. Remove the debugConfig signing line required by AI Studio
+          find . -name "build.gradle.kts" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
+          find . -name "build.gradle" -exec sed -i '/signingConfig.*debugConfig/d' {} + || true
+
+          # 4. Make gradlew executable or create wrapper
+          if [ -f "gradlew" ]; then
+            chmod +x ./gradlew
+          else
+            echo "Generating Gradle wrapper..."
+            gradle wrapper --gradle-version 8.7
+            chmod +x ./gradlew
+          fi
+
+          # 5. Build the Debug APK
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
