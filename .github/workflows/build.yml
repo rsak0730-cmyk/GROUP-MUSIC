@@ -19,19 +19,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Extract Project ZIP Safely
+      - name: Extract Project ZIP
         run: |
-          python3 -c "
-          import zipfile, glob, os
-          for z in glob.glob('**/*.zip', recursive=True):
-              print(f'Extracting: {z}')
-              with zipfile.ZipFile(z, 'r') as zip_ref:
-                  zip_ref.extractall('.')
-          "
+          python3 -c "import zipfile, glob; [zipfile.ZipFile(z).extractall('.') for z in glob.glob('**/*.zip', recursive=True)]"
 
-      - name: Setup Environment & Fix Build Config
+      - name: Prepare Environment and Fix Gradle
         run: |
-          GRADLEW_FILE=$(find . -type f -name "gradlew" | head -n 1)
-          
-          if [ -z "$GRADLEW_FILE" ]; then
+          echo "GEMINI_API_KEY=dummy_key" > .env
+          find . -name "build.gradle.kts" -exec sed -i '/debugConfig/d' {} + || true
+          find . -name "gradlew" -exec chmod +x {} +
 
+      - name: Build Debug APK
+        run: |
+          GRADLEW_FILE=$(find . -name "gradlew" | head -n 1)
+          DIR=$(dirname "$GRADLEW_FILE")
+          cd "$DIR"
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: '**/build/outputs/apk/debug/*.apk'
