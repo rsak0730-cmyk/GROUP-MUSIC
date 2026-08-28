@@ -13,10 +13,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Android SDK
@@ -29,33 +29,93 @@ jobs:
 
       - name: Build Android APK
         run: |
+          # 1. Accept SDK licenses & install build tools
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+          # 2. Reset workspace directory
+          rm -rf app_build
           mkdir -p app_build/www
 
-          # Unzip any archives
-          python3 -c "import zipfile, glob; [zipfile.ZipFile(z).extractall('.') for z in glob.glob('**/*.zip', recursive=True)]" || true
+          # 3. Unpack project zip files if present
+          python3 -c "
+          import zipfile, glob
+          for z in glob.glob('**/*.zip', recursive=True):
+              try:
+                  with zipfile.ZipFile(z, 'r') as zip_ref:
+                      zip_ref.extractall('extracted_zip')
+              except Exception as e:
+                  print(e)
+          " || true
 
-          # Locate index.html
-          HTML=$(find . -name "index.html" | head -n 1)
-          if [ -n "$HTML" ]; then
-            cp "$HTML" app_build/www/index.html
+          # 4. Copy web interface files
+          HTML_PATH=$(find . -name "index.html" | head -n 1)
+          if [ -n "$HTML_PATH" ]; then
+            cp "$HTML_PATH" app_build/www/index.html
           else
             echo "<!DOCTYPE html><html><body><h1>SoundSync App</h1></body></html>" > app_build/www/index.html
           fi
 
+          # 5. Initialize Capacitor
           cd app_build
           npm init -y
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
           npx cap init "SoundSync" "com.soundsync.app" --web-dir "www"
           npx cap add android
 
-          # Inject permissions
+          # 6. Safe Configuration: Inject Permissions & Resolve Duplicate Kotlin Classes
           python3 -c "
-          p = 'android/app/src/main/AndroidManifest.xml'
-          with open(p, 'r') as f: c = f.read()
-          c = c.replace('<application', '<uses-permission android:name=\"android.permission.CAMERA\"/><uses-permission android:name=\"android.permission.RECORD_AUDIO\"/><uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\"/><application')
-          with open(p, 'w') as f: f.write(c)
+          import os
+
+          # Add Android hardware permissions
+          manifest_path = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(manifest_path):
+              with open(manifest_path, 'r') as f:
+                  data = f.read()
+              perms = '''
+                  <uses-permission android:name=\"android.permission.INTERNET\" />
+                  <uses-permission android:name=\"android.permission.CAMERA\" />
+                  <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />
+                  <uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\" />
+              '''
+              data = data.replace('</manifest>', perms + '\n</manifest>')
+              with open(manifest_path, 'w') as f:
+                  f.write(data)
+
+          # Fix Kotlin Duplicate Classes Conflict in app/build.gradle
+          gradle_path = 'android/app/build.gradle'
+          if os.path.exists(gradle_path):
+              with open(gradle_path, 'r') as f:
+                  g_data = f.read()
+              fix = '''
+          configurations.all {
+              exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+              exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+          }
+          dependencies {
+              implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
+              constraints {
+                  implementation(\"org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22\") {
+                      because(\"kotlin-stdlib-jdk7 is now integrated into kotlin-stdlib\")
+                  }
+                  implementation(\"org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22\") {
+                      because(\"kotlin-stdlib-jdk8 is now integrated into kotlin-stdlib\")
+                  }
+              }
+          }
+          '''
+              g_data += fix
+              with open(gradle_path, 'w') as f:
+                  f.write(g_data)
+
+          # Enable AndroidX and Jetifier
+          props_path = 'android/gradle.properties'
+          if os.path.exists(props_path):
+              with open(props_path, 'a') as f:
+                  f.write('\nandroid.enableJetifier=true\nandroid.useAndroidX=true\n')
           "
 
+          # 7. Sync and Compile Debug APK
           npx cap sync android
           cd android
           chmod +x gradlew
